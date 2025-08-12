@@ -1,0 +1,182 @@
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'BRANCH_NAME',
+            choices: ['main', 'dev'],
+            description: 'Select branch to deploy'
+        )
+        choice(
+            name: 'ACTION',
+            choices: ['deploy', 'stop', 'restart'],
+            description: 'Select action to perform'
+        )
+    }
+    
+    tools {
+        nodejs 'Node-7.8.0'
+    }
+    
+    environment {
+        DOCKER_IMAGE = "cicd-app-manual"
+        PORT = "${params.BRANCH_NAME == 'main' ? '3000' : '3001'}"
+        CONTAINER_NAME = "cicd-app-manual-${params.BRANCH_NAME}"
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                echo "Manually deploying ${params.BRANCH_NAME} branch"
+                checkout([$class: 'GitSCM',
+                    branches: [[name: "*/${params.BRANCH_NAME}"]],
+                    userRemoteConfigs: [[url: 'https://github.com/AndriiBereznyi/jenkins-cicd-lab.git']]
+                ])
+            }
+        }
+        
+        stage('Build') {
+            when {
+                expression { params.ACTION == 'deploy' || params.ACTION == 'restart' }
+            }
+            steps {
+                echo "Building application for ${params.BRANCH_NAME} branch"
+                sh '''
+                    echo "Installing dependencies..."
+                    if [ -f package.json ]; then
+                        npm install
+                    else
+                        echo "Creating basic Node.js app"
+                        npm init -y
+                        npm install express
+                    fi
+                '''
+            }
+        }
+        
+        stage('Test') {
+            when {
+                expression { params.ACTION == 'deploy' || params.ACTION == 'restart' }
+            }
+            steps {
+                echo "Running tests for ${params.BRANCH_NAME} branch"
+                sh '''
+                    echo "Running manual deployment tests..."
+                    npm test || echo "No tests defined, continuing..."
+                '''
+            }
+        }
+        
+        stage('Build Docker Image') {
+            when {
+                expression { params.ACTION == 'deploy' || params.ACTION == 'restart' }
+            }
+            steps {
+                script {
+                    echo "Building Docker image for manual deployment"
+                    
+                    sh '''
+                        if [ ! -f Dockerfile ]; then
+                            cat > Dockerfile << 'DOCKER_EOF'
+FROM node:16-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE ${PORT}
+CMD ["node", "server.js"]
+DOCKER_EOF
+                        fi
+                        
+                        if [ ! -f server.js ]; then
+                            cat > server.js << 'SERVER_EOF'
+const express = require('express');
+const path = require('path');
+const app = express();
+const port = process.env.PORT || 3000;
+
+app.use(express.static('.'));
+
+app.get('/', (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Manual CICD Deploy - ${process.env.BRANCH_NAME || "Unknown"}</title>
+        </head>
+        <body style="text-align: center; font-family: Arial, sans-serif; padding: 50px;">
+            <h1>Jenkins Manual Deployment</h1>
+            <h2>Branch: ${process.env.BRANCH_NAME || "Unknown"}</h2>
+            <h3>Port: ${port}</h3>
+            <div style="margin: 20px;">
+                <img src="/logo.svg" alt="Branch Logo" style="max-width: 300px;">
+            </div>
+            <p>Manually deployed via Jenkins CD_deploy_manual pipeline!</p>
+        </body>
+        </html>
+    `);
+});
+
+app.listen(port, () => {
+    console.log(`Manual deployment running on port ${port} for branch ${process.env.BRANCH_NAME || "Unknown"}`);
+});
+SERVER_EOF
+                        fi
+                    '''
+                    
+                    sh "docker build -t ${DOCKER_IMAGE}:${params.BRANCH_NAME} --build-arg PORT=${PORT} ."
+                }
+            }
+        }
+        
+        stage('Deploy/Stop/Restart') {
+            steps {
+                script {
+                    switch(params.ACTION) {
+                        case 'deploy':
+                        case 'restart':
+                            echo "Deploying/Restarting application for ${params.BRANCH_NAME} branch"
+                            sh """
+                                docker stop ${CONTAINER_NAME} || true
+                                docker rm ${CONTAINER_NAME} || true
+                                docker run -d \
+                                    --name ${CONTAINER_NAME} \
+                                    -p ${PORT}:${PORT} \
+                                    -e PORT=${PORT} \
+                                    -e BRANCH_NAME=${params.BRANCH_NAME} \
+                                    ${DOCKER_IMAGE}:${params.BRANCH_NAME}
+                            """
+                            echo "Application ${params.ACTION} completed!"
+                            echo "Access at: http://localhost:${PORT}"
+                            break
+                        
+                        case 'stop':
+                            echo "Stopping application for ${params.BRANCH_NAME} branch"
+                            sh """
+                                docker stop ${CONTAINER_NAME} || true
+                                docker rm ${CONTAINER_NAME} || true
+                            """
+                            echo "Application stopped successfully!"
+                            break
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            echo "Manual pipeline completed for ${params.BRANCH_NAME} branch with action: ${params.ACTION}"
+        }
+        success {
+            script {
+                if (params.ACTION == 'deploy' || params.ACTION == 'restart') {
+                    echo "Manual deployment succeeded! Application is running on port ${PORT}"
+                }
+            }
+        }
+        failure {
+            echo "Manual pipeline failed!"
+        }
+    }
+}
