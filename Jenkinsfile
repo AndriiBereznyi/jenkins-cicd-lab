@@ -53,7 +53,6 @@ pipeline {
                 script {
                     echo "Building Docker image for ${BRANCH_NAME} branch with port ${PORT}"
                     
-                    // Create Dockerfile if it doesn't exist
                     sh '''
                         if [ ! -f Dockerfile ]; then
                             cat > Dockerfile << 'DOCKER_EOF'
@@ -68,7 +67,6 @@ DOCKER_EOF
                         fi
                     '''
                     
-                    // Create server.js if it doesn't exist
                     sh '''
                         if [ ! -f server.js ]; then
                             cat > server.js << 'SERVER_EOF'
@@ -106,7 +104,6 @@ SERVER_EOF
                         fi
                     '''
                     
-                    // Build Docker image
                     sh "docker build -t ${DOCKER_IMAGE}:${BRANCH_NAME} --build-arg PORT=${PORT} ."
                 }
             }
@@ -117,13 +114,11 @@ SERVER_EOF
                 script {
                     echo "Deploying application for ${BRANCH_NAME} branch on port ${PORT}"
                     
-                    // Stop and remove existing container
                     sh """
                         docker stop ${CONTAINER_NAME} || true
                         docker rm ${CONTAINER_NAME} || true
                     """
                     
-                    // Run new container
                     sh """
                         docker run -d \
                             --name ${CONTAINER_NAME} \
