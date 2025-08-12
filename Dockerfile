@@ -1,5 +1,8 @@
-FROM node:7.8.0
-WORKDIR /opt
-ADD . /opt
-RUN npm install
-ENTRYPOINT npm run start
+FROM node:16-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --production
+COPY . .
+EXPOSE 3000
+EXPOSE 3001
+CMD ["node", "server.js"]
